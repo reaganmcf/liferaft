@@ -1,24 +1,21 @@
 use actix::{Actor, Addr};
-use actix_web::{get, middleware::Logger, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{middleware::Logger, web, App, HttpServer};
+use admin::get_state;
 use clap::Parser;
 use dotenv::dotenv;
-use rpc::request_vote;
+use rpc::{raft_request_vote, raft_append_entries};
 use state::State;
 
+mod admin;
+mod messages;
 mod rpc;
 mod state;
-mod messages;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
     #[arg(long)]
     port: u16,
-}
-
-#[get("/")]
-async fn hello() -> impl Responder {
-    HttpResponse::Ok().body("Hello world!")
 }
 
 pub struct AppData {
@@ -35,8 +32,9 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         App::new()
-            .service(hello)
-            .service(request_vote)
+            .service(get_state)
+            .service(raft_request_vote)
+            .service(raft_append_entries)
             .wrap(Logger::default())
             .app_data(web::Data::new(AppData {
                 state_actor: state_addr.clone(),
