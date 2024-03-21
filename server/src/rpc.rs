@@ -1,15 +1,19 @@
-use actix_web::{post, web::Json, HttpResponse, Responder};
-use serde::{Deserialize, Serialize};
+use actix_web::{
+    post,
+    web::{Data, Json},
+    HttpResponse, Responder,
+};
+use log::error;
 
-#[derive(Deserialize, Serialize, Debug)]
-struct RequestVote {
-    term: u64,
-    candidate_id: String,
-    last_log_index: u64,
-    last_log_term: u64,
-}
+use crate::{messages::RequestVote, AppData};
 
 #[post("/raft-request-vote")]
-async fn request_vote(Json(body): Json<RequestVote>) -> impl Responder {
-    HttpResponse::Ok().json(body)
+async fn request_vote(Json(body): Json<RequestVote>, data: Data<AppData>) -> impl Responder {
+    match data.state_actor.send(body).await {
+        Ok(response) => HttpResponse::Ok().json(response),
+        Err(e) => {
+            error!("{}", e);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
 }
