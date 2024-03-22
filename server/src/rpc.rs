@@ -3,11 +3,11 @@ use actix_web::{
     web::{Data, Json},
     HttpResponse, Responder,
 };
-use log::error;
+use log::{error, debug};
 
 use crate::{
     messages::{AppendEntries, RequestVote},
-    AppData,
+    AppData, models::NodeId,
 };
 
 #[post("/raft-request-vote")]
@@ -32,5 +32,16 @@ async fn raft_append_entries(
             error!("{}", e);
             HttpResponse::InternalServerError().finish()
         }
+    }
+}
+
+pub async fn send_vote_request(node_id: NodeId, request_vote: RequestVote) {
+    let url = format!("http://localhost:{}/raft-request-vote", node_id);
+
+    debug!("Sending vote request to {}", node_id);
+
+    let client = awc::Client::default();
+    if client.post(url).send_json(&request_vote).await.is_err() {
+        error!("Failed to send vote request to {}", node_id);
     }
 }

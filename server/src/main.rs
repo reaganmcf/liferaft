@@ -1,19 +1,29 @@
+use std::collections::HashSet;
+
 use actix::{Actor, Addr};
 use actix_web::{middleware::Logger, web, App, HttpServer};
 use admin::get_state;
 use clap::Parser;
 use dotenv::dotenv;
-use rpc::{raft_request_vote, raft_append_entries};
+use models::NodeId;
+use rpc::{raft_append_entries, raft_request_vote};
 use state::State;
 
 mod admin;
 mod messages;
+mod models;
 mod rpc;
 mod state;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(long)]
+    node_id: String,
+
+    #[arg(long)]
+    other_nodes: Vec<String>,
+
     #[arg(long)]
     port: u16,
 }
@@ -28,7 +38,15 @@ async fn main() -> std::io::Result<()> {
     env_logger::init();
     let args = Args::parse();
 
-    let state_addr = state::State::initialize().start();
+    if args.other_nodes.is_empty() {
+        panic!("At least one other node must be provided");
+    }
+
+    let state_addr = state::State::initialize(
+        args.node_id,
+        args.other_nodes.into_iter().collect::<HashSet<NodeId>>(),
+    )
+    .start();
 
     HttpServer::new(move || {
         App::new()

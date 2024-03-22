@@ -1,15 +1,15 @@
 use actix::{Message, MessageResponse};
 use serde::{Deserialize, Serialize};
 
-use crate::state::{Term, NodeId, LogIndex, LogEntry};
+use crate::models::*;
 
 #[derive(Deserialize, Serialize, Debug, Message)]
 #[rtype(result = "RequestVoteResult")]
 pub struct RequestVote {
-    term: u64,
-    candidate_id: String,
-    last_log_index: u64,
-    last_log_term: u64,
+    pub term: Term,
+    pub candidate_id: NodeId,
+    pub last_log_index: u64,
+    pub last_log_term: Term,
 }
 
 #[derive(Deserialize, Serialize, Debug, MessageResponse)]
