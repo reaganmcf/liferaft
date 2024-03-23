@@ -14,6 +14,7 @@ mod messages;
 mod models;
 mod rpc;
 mod state;
+mod log;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
