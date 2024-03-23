@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Serialize, Deserialize};
 
@@ -16,7 +16,9 @@ pub struct LogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Role {
     Follower,
-    Candidate,
+    Candidate {
+        votes_received: HashMap<NodeId, bool>,
+    },
     Leader {
         next_index: HashMap<NodeId, LogIndex>,
         match_index: HashMap<NodeId, LogIndex>,
@@ -26,6 +28,12 @@ pub enum Role {
 impl Role {
     pub fn is_leader(&self) -> bool {
         matches!(self, Role::Leader { .. })
+    }
+
+    pub fn candidate(other_nodes: &HashSet<NodeId>) -> Role {
+        Role::Candidate {
+            votes_received: other_nodes.iter().map(|node_id| (node_id.clone(), false)).collect(),
+        }
     }
 }
 

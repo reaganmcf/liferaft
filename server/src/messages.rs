@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::*;
 
-#[derive(Deserialize, Serialize, Debug, Message)]
-#[rtype(result = "RequestVoteResult")]
+#[derive(Deserialize, Serialize, Debug, Clone, Message)]
+#[rtype(result = "RequestVoteResponse")]
 pub struct RequestVote {
     pub term: Term,
     pub candidate_id: NodeId,
@@ -12,14 +12,34 @@ pub struct RequestVote {
     pub last_log_term: Term,
 }
 
-#[derive(Deserialize, Serialize, Debug, MessageResponse)]
-pub struct RequestVoteResult {
+#[derive(Deserialize, Serialize, Debug, Clone, Message, MessageResponse)]
+#[rtype(result = "()")]
+pub struct RequestVoteResponse {
+    pub from: NodeId,
     pub term: Term,
     pub vote_granted: bool,
 }
 
-#[derive(Deserialize, Serialize, Debug, Message)]
-#[rtype(result = "AppendEntriesResult")]
+impl RequestVoteResponse {
+    pub fn granted(from: NodeId, term: Term) -> Self {
+        Self {
+            from,
+            term,
+            vote_granted: true,
+        }
+    }
+
+    pub fn denied(from: NodeId, term: Term) -> Self {
+        Self {
+            from,
+            term,
+            vote_granted: false,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Message)]
+#[rtype(result = "AppendEntriesResponse")]
 pub struct AppendEntries {
     pub term: Term,
     pub leader_id: NodeId,
@@ -29,24 +49,28 @@ pub struct AppendEntries {
     pub leader_commit: u128,
 }
 
-#[derive(Deserialize, Serialize, Debug, MessageResponse)]
-pub struct AppendEntriesResult {
-    term: Term,
-    success: bool
+#[derive(Deserialize, Serialize, Debug, Clone, Message, MessageResponse)]
+#[rtype(result = "()")]
+pub struct AppendEntriesResponse {
+    pub from: NodeId,
+    pub term: Term,
+    pub success: bool,
 }
 
-impl AppendEntriesResult {
-    pub fn success(term: Term) -> Self {
+impl AppendEntriesResponse {
+    pub fn success(from: NodeId, term: Term) -> Self {
         Self {
+            from,
             term,
-            success: true
+            success: true,
         }
     }
 
-    pub fn failure(term: Term) -> Self {
+    pub fn failure(from: NodeId, term: Term) -> Self {
         Self {
+            from,
             term,
-            success: false
+            success: false,
         }
     }
 }
