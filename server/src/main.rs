@@ -2,19 +2,17 @@ use std::collections::HashSet;
 
 use actix::{Actor, Addr};
 use actix_web::{middleware::Logger, web, App, HttpServer};
-use admin::get_state;
 use clap::Parser;
 use dotenv::dotenv;
 use models::NodeId;
 use node::Node;
-use rpc::{raft_append_entries, raft_request_vote};
 
-mod admin;
 mod log;
 mod messages;
 mod models;
 mod node;
 mod rpc;
+mod routes;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -28,6 +26,7 @@ struct Args {
     #[arg(long)]
     port: u16,
 }
+
 
 pub struct AppData {
     node_actor: Addr<Node>,
@@ -49,9 +48,9 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         App::new()
-            .service(get_state)
-            .service(raft_request_vote)
-            .service(raft_append_entries)
+            .service(routes::admin::get_state)
+            .service(routes::raft::raft_request_vote)
+            .service(routes::raft::raft_append_entries)
             .wrap(Logger::default())
             .app_data(web::Data::new(AppData {
                 node_actor: node_addr.clone(),

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::log::{Log, LogIndex};
+use crate::log::Log;
 use crate::messages::{AppendEntries, AppendEntriesResponse, RequestVote, RequestVoteResponse};
 use crate::models::*;
 use crate::rpc::RpcClient;

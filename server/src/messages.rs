@@ -1,7 +1,10 @@
 use actix::{Message, MessageResponse};
 use serde::{Deserialize, Serialize};
 
-use crate::{models::*, log::{LogIndex, LogEntry}};
+use crate::{
+    log::{LogEntry, LogIndex},
+    models::*,
+};
 
 #[derive(Deserialize, Serialize, Debug, Clone, Message)]
 #[rtype(result = "RequestVoteResponse")]

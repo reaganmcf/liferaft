@@ -1,9 +1,6 @@
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
-};
+use std::collections::{HashMap, HashSet};
 
-use actix::{MessageResponse, SpawnHandle};
+use actix::MessageResponse;
 use serde::{Deserialize, Serialize};
 
 use crate::log::{Log, LogIndex};
