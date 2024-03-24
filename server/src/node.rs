@@ -25,7 +25,7 @@ pub struct Node {
 impl Node {
     pub fn initialize(id: NodeId, peers: HashSet<NodeId>) -> Self {
         let election_timeout_duration = {
-            if id == String::from("1234") {
+            if id == *"1234" {
                 Duration::from_secs(3)
             } else {
                 Duration::from_secs(thread_rng().gen_range(5..=40))
@@ -93,7 +93,7 @@ impl Node {
     fn reset_election_timer(&mut self, ctx: &mut Context<Self>) {
         info!("Resetting election timer");
         if let Some(handle) = self.election_timer.take() {
-            if ctx.cancel_future(handle) == false {
+            if !ctx.cancel_future(handle) {
                 panic!("Failed to cancel election timer");
             }
         }

@@ -11,8 +11,8 @@ mod log;
 mod messages;
 mod models;
 mod node;
-mod rpc;
 mod routes;
+mod rpc;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -26,7 +26,6 @@ struct Args {
     #[arg(long)]
     port: u16,
 }
-
 
 pub struct AppData {
     node_actor: Addr<Node>,

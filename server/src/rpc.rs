@@ -13,6 +13,10 @@ pub struct RpcClient {
     client: awc::Client,
 }
 
+// Safety: RpcClient is safe to send and share between threads
+unsafe impl Send for RpcClient {}
+unsafe impl Sync for RpcClient {}
+
 impl RpcClient {
     pub fn new() -> Self {
         Self {

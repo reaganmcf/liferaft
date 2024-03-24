@@ -2,7 +2,7 @@ use actix::{Handler, Message};
 use actix_web::{get, web::Data, HttpResponse, Responder};
 use log::error;
 
-use crate::{models::State, AppData, node::Node};
+use crate::{models::State, node::Node, AppData};
 
 #[get("/state")]
 async fn get_state(data: Data<AppData>) -> impl Responder {
