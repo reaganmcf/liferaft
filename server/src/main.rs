@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::time::Duration;
 
 use actix::{Actor, Addr};
 use actix_web::{middleware::Logger, web, App, HttpServer};
@@ -25,6 +26,9 @@ struct Args {
 
     #[arg(long)]
     port: u16,
+
+    #[arg(long, default_value = "3000")]
+    heratbeat_interval_ms: u64,
 }
 
 pub struct AppData {
@@ -41,9 +45,12 @@ async fn main() -> std::io::Result<()> {
         panic!("At least one peer must be provided");
     }
 
-    let node_addr =
-        node::Node::initialize(args.id, args.peers.into_iter().collect::<HashSet<NodeId>>())
-            .start();
+    let node_addr = node::Node::initialize(
+        args.id,
+        args.peers.into_iter().collect::<HashSet<NodeId>>(),
+        Duration::from_millis(args.heratbeat_interval_ms),
+    )
+    .start();
 
     HttpServer::new(move || {
         App::new()

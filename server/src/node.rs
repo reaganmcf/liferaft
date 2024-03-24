@@ -16,15 +16,17 @@ pub struct Node {
     pub role: Role,
 
     pub state: State,
-    pub election_timeout_duration: Duration,
+    pub election_timeout_interval: Duration,
     pub election_timer: Option<SpawnHandle>,
+    pub heartbeat_interval: Duration,
 
     pub rpc_client: Arc<RpcClient>,
 }
 
 impl Node {
-    pub fn initialize(id: NodeId, peers: HashSet<NodeId>) -> Self {
-        let election_timeout_duration = {
+    pub fn initialize(id: NodeId, peers: HashSet<NodeId>, heartbeat_interval: Duration) -> Self {
+        // TODO - fix this hack
+        let election_timeout_interval = {
             if id == *"1234" {
                 Duration::from_secs(3)
             } else {
@@ -32,7 +34,7 @@ impl Node {
             }
         };
 
-        debug!("Election timeout set to {:?}", election_timeout_duration);
+        debug!("Election timeout set to {:?}", election_timeout_interval);
 
         Self {
             id,
@@ -50,8 +52,9 @@ impl Node {
                 next_index: HashMap::default(),
                 match_index: HashMap::default(),
             },
-            election_timeout_duration,
+            election_timeout_interval,
             election_timer: None,
+            heartbeat_interval,
             rpc_client: Arc::new(RpcClient::new()),
         }
     }
@@ -98,7 +101,7 @@ impl Node {
             }
         }
 
-        self.election_timer = Some(ctx.run_later(self.election_timeout_duration, |_, ctx| {
+        self.election_timer = Some(ctx.run_later(self.election_timeout_interval, |_, ctx| {
             ctx.notify(ElectionTimeout);
         }));
     }
@@ -112,10 +115,8 @@ impl Actor for Node {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        let interval = Duration::from_secs(3);
-
         // Heartbeat timer for leaders
-        ctx.run_interval(interval, |_act, ctx| ctx.notify(SendHeartbeatToFollowers));
+        ctx.run_interval(self.heartbeat_interval, |_act, ctx| ctx.notify(SendHeartbeatToFollowers));
 
         // Election timer for followers and candidates
         self.reset_election_timer(ctx);
