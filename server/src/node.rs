@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::log::Log;
-use crate::messages::{AppendEntries, AppendEntriesResponse, RequestVote, RequestVoteResponse};
+use crate::messages::{
+    AppendEntries, AppendEntriesResponse, GetKey, GetKeyResponse, RequestVote, RequestVoteResponse,
+    SetKey, SetKeyResponse,
+};
 use crate::models::*;
 use crate::rpc::RpcClient;
 
@@ -116,7 +119,9 @@ impl Actor for Node {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         // Heartbeat timer for leaders
-        ctx.run_interval(self.heartbeat_interval, |_act, ctx| ctx.notify(SendHeartbeatToFollowers));
+        ctx.run_interval(self.heartbeat_interval, |_act, ctx| {
+            ctx.notify(SendHeartbeatToFollowers)
+        });
 
         // Election timer for followers and candidates
         self.reset_election_timer(ctx);
@@ -326,6 +331,24 @@ impl Handler<AppendEntriesResponse> for Node {
     fn handle(&mut self, msg: AppendEntriesResponse, _ctx: &mut Self::Context) -> Self::Result {
         debug!("Received an append entries result, {:#?}", msg);
         error!("AppendEntriesResult not implemented");
-        // panic!();
+    }
+}
+
+impl Handler<GetKey> for Node {
+    type Result = GetKeyResponse;
+
+    fn handle(&mut self, msg: GetKey, _ctx: &mut Self::Context) -> Self::Result {
+        error!("GetKey not implemented");
+
+        GetKeyResponse::failure()
+    }
+}
+
+impl Handler<SetKey> for Node {
+    type Result = SetKeyResponse;
+
+    fn handle(&mut self, msg: SetKey, _ctx: &mut Self::Context) -> Self::Result {
+        error!("SetKey not implemented");
+        SetKeyResponse::failure()
     }
 }

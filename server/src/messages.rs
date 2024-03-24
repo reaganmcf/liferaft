@@ -77,3 +77,53 @@ impl AppendEntriesResponse {
         }
     }
 }
+
+#[derive(Deserialize, Serialize, Debug, Clone, Message)]
+#[rtype(result = "SetKeyResponse")]
+pub struct SetKey {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, MessageResponse)]
+pub struct SetKeyResponse {
+    success: bool,
+}
+
+impl SetKeyResponse {
+    pub fn success() -> Self {
+        Self { success: true }
+    }
+
+    pub fn failure() -> Self {
+        Self { success: false }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Message)]
+#[rtype(result = "GetKeyResponse")]
+pub struct GetKey {
+    pub key: String,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, MessageResponse)]
+pub struct GetKeyResponse {
+    pub success: bool,
+    pub value: Option<String>,
+}
+
+impl GetKeyResponse {
+    pub fn success(value: Option<String>) -> Self {
+        Self {
+            success: true,
+            value,
+        }
+    }
+
+    pub fn failure() -> Self {
+        Self {
+            success: false,
+            value: None,
+        }
+    }
+}
