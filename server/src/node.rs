@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::log::Log;
+use crate::log::{Log, LogEntry, LogEntryContent, KvChange};
 use crate::messages::{
     AppendEntries, AppendEntriesResponse, GetKey, GetKeyResponse, RequestVote, RequestVoteResponse,
     SetKey, SetKeyResponse,
@@ -348,7 +348,16 @@ impl Handler<SetKey> for Node {
     type Result = SetKeyResponse;
 
     fn handle(&mut self, msg: SetKey, _ctx: &mut Self::Context) -> Self::Result {
-        error!("SetKey not implemented");
-        SetKeyResponse::failure()
+        debug!("Received a set key request, {:#?}", msg);
+
+        let entry = LogEntry {
+            term: self.state.current_term,
+            content: LogEntryContent::Kv(KvChange::Set(msg.key.clone(), msg.value.clone())),
+        };
+
+        self.state.log.append(entry);
+
+        // We cannot return success until the entry has been 
+        // replicated to the quorum of nodes
     }
 }

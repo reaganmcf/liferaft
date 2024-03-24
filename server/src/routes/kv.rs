@@ -1,6 +1,7 @@
 use actix_web::{
+    get,
     post,
-    web::{Data, Json},
+    web::{Data, Json, Path},
     HttpResponse, Responder,
 };
 use log::error;
@@ -21,9 +22,11 @@ async fn set(data: Data<AppData>, Json(body): Json<SetKey>) -> impl Responder {
     }
 }
 
-#[post("/kv/get")]
-async fn get(data: Data<AppData>, Json(body): Json<GetKey>) -> impl Responder {
-    match data.node_actor.send(body).await {
+#[get("/kv/get/{key}")]
+async fn get(data: Data<AppData>, path: Path<String>) -> impl Responder {
+    let request: GetKey = path.into();
+
+    match data.node_actor.send(request).await {
         Ok(response) => HttpResponse::Ok().json(response),
         Err(e) => {
             error!("{}", e);

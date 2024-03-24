@@ -57,6 +57,8 @@ async fn main() -> std::io::Result<()> {
             .service(routes::admin::get_state)
             .service(routes::raft::raft_request_vote)
             .service(routes::raft::raft_append_entries)
+            .service(routes::kv::set)
+            .service(routes::kv::get)
             .wrap(Logger::default())
             .app_data(web::Data::new(AppData {
                 node_actor: node_addr.clone(),

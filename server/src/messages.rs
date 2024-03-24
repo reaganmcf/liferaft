@@ -1,4 +1,5 @@
 use actix::{Message, MessageResponse};
+use actix_web::web;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -104,6 +105,14 @@ impl SetKeyResponse {
 #[rtype(result = "GetKeyResponse")]
 pub struct GetKey {
     pub key: String,
+}
+
+impl From<web::Path<String>> for GetKey {
+    fn from(path: web::Path<String>) -> Self {
+        Self {
+            key: path.into_inner(),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, MessageResponse)]
