@@ -1,42 +1,29 @@
 use actix::prelude::*;
 use log::{debug, error, info, warn};
 use rand::{thread_rng, Rng};
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::log::{LogIndex, Log};
+use crate::log::{Log, LogIndex};
 use crate::messages::{AppendEntries, AppendEntriesResponse, RequestVote, RequestVoteResponse};
 use crate::models::*;
-use crate::rpc::{send_append_entries, send_vote_request};
+use crate::rpc::RpcClient;
 
-#[derive(Debug, Clone, Serialize, Deserialize, MessageResponse)]
-pub struct State {
-    id: NodeId,
-    other_nodes: HashSet<NodeId>,
+pub struct Node {
+    pub id: NodeId,
+    pub peers: HashSet<NodeId>,
+    pub role: Role,
 
-    role: Role,
-    // persistent state on all servers
-    current_term: Term,
-    voted_for: Option<NodeId>,
-    log: Log,
-    
-    // volatile state on all servers
-    commit_index: u128,
-    last_applied: LogIndex,
+    pub state: State,
+    pub election_timeout_duration: Duration,
+    pub election_timer: Option<SpawnHandle>,
 
-    // volatile state on leaders
-    // (Reinitialized after election)
-    next_index: HashMap<NodeId, LogIndex>,
-    match_index: HashMap<NodeId, LogIndex>,
-
-    election_timeout_duration: Duration,
-    #[serde(skip_serializing, skip_deserializing)]
-    election_timer: Option<SpawnHandle>,
+    pub rpc_client: Arc<RpcClient>,
 }
 
-impl State {
-    pub fn initialize(id: NodeId, other_nodes: HashSet<NodeId>) -> State {
+impl Node {
+    pub fn initialize(id: NodeId, peers: HashSet<NodeId>) -> Self {
         let election_timeout_duration = {
             if id == String::from("1234") {
                 Duration::from_secs(3)
@@ -47,54 +34,60 @@ impl State {
 
         debug!("Election timeout set to {:?}", election_timeout_duration);
 
-        State {
+        Self {
             id,
-            other_nodes,
+            peers,
 
             role: Role::Follower,
-            current_term: 0,
-            voted_for: None,
-            log: Log::new(),
+            state: State {
+                current_term: 0,
+                voted_for: None,
+                log: Log::new(),
 
-            commit_index: 0,
-            last_applied: 0,
+                commit_index: 0,
+                last_applied: 0,
 
-            next_index: HashMap::default(),
-            match_index: HashMap::default(),
-
+                next_index: HashMap::default(),
+                match_index: HashMap::default(),
+            },
             election_timeout_duration,
             election_timer: None,
+            rpc_client: Arc::new(RpcClient::new()),
         }
     }
 
     fn start_election(&mut self, ctx: &mut Context<Self>) {
         debug!("Starting election");
 
-        self.role = Role::candidate(&self.other_nodes);
-        self.current_term += 1;
-        self.voted_for = Some(self.id.clone());
+        self.role = Role::candidate(&self.peers);
+        self.state.current_term += 1;
+        self.state.voted_for = Some(self.id.clone());
 
         let addr = ctx.address();
 
-        for node_id in self.other_nodes.iter() {
+        for node_id in self.peers.iter() {
             let request_vote = RequestVote {
-                term: self.current_term,
+                term: self.state.current_term,
                 candidate_id: self.id.clone(),
-                last_log_index: self.log.len() as u64,
-                last_log_term: self.log.last().map_or(0, |entry| entry.term),
+                last_log_index: self.state.log.len() as u64,
+                last_log_term: self.state.log.last().map_or(0, |entry| entry.term),
             };
 
             let cloned = node_id.clone();
             let cloned_addr = addr.clone();
+            let rpc_client = self.rpc_client.clone();
             actix_web::rt::spawn(async move {
-                let response = send_vote_request(cloned, request_vote).await;
-                cloned_addr.do_send(response);
+                let future = rpc_client.send_request_vote(cloned, request_vote);
+                match future.await {
+                    Ok(response) => cloned_addr.do_send(response),
+                    Err(e) => error!("{}", e),
+                }
             });
         }
     }
 
     fn qourum(&self) -> usize {
-        self.other_nodes.len() / 2 + 1
+        self.peers.len() / 2 + 1
     }
 
     fn reset_election_timer(&mut self, ctx: &mut Context<Self>) {
@@ -115,7 +108,7 @@ impl State {
 #[rtype(result = "()")]
 struct SendHeartbeatToFollowers;
 
-impl Actor for State {
+impl Actor for Node {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
@@ -129,28 +122,32 @@ impl Actor for State {
     }
 }
 
-impl Handler<SendHeartbeatToFollowers> for State {
+impl Handler<SendHeartbeatToFollowers> for Node {
     type Result = ();
     fn handle(&mut self, _msg: SendHeartbeatToFollowers, ctx: &mut Self::Context) -> Self::Result {
         if let Role::Leader { .. } = self.role {
             debug!("Sending heartbeat to followers");
 
             let addr = ctx.address();
-            for node_id in self.other_nodes.iter() {
+            for node_id in self.peers.iter() {
                 let append_entries = AppendEntries {
-                    term: self.current_term,
+                    term: self.state.current_term,
                     leader_id: self.id.clone(),
-                    prev_log_index: self.log.len() as u128,
-                    prev_log_term: self.log.last().map_or(0, |entry| entry.term),
+                    prev_log_index: self.state.log.len() as u128,
+                    prev_log_term: self.state.log.last().map_or(0, |entry| entry.term),
                     entries: Vec::default(),
-                    leader_commit: self.commit_index,
+                    leader_commit: self.state.commit_index,
                 };
 
                 let cloned = node_id.clone();
                 let cloned_addr = addr.clone();
+                let rpc_client = self.rpc_client.clone();
                 actix_web::rt::spawn(async move {
-                    let response = send_append_entries(cloned, append_entries).await;
-                    cloned_addr.do_send(response);
+                    let future = rpc_client.send_append_entries(cloned, append_entries);
+                    match future.await {
+                        Ok(response) => cloned_addr.do_send(response),
+                        Err(e) => error!("{}", e),
+                    }
                 });
             }
         }
@@ -161,7 +158,7 @@ impl Handler<SendHeartbeatToFollowers> for State {
 #[rtype(result = "()")]
 struct ElectionTimeout;
 
-impl Handler<ElectionTimeout> for State {
+impl Handler<ElectionTimeout> for Node {
     type Result = ();
 
     fn handle(&mut self, _msg: ElectionTimeout, ctx: &mut Self::Context) -> Self::Result {
@@ -170,7 +167,7 @@ impl Handler<ElectionTimeout> for State {
                 self.start_election(ctx);
             }
             Role::Follower => {
-                self.role = Role::candidate(&self.other_nodes);
+                self.role = Role::candidate(&self.peers);
                 self.start_election(ctx);
             }
             Role::Leader { .. } => {
@@ -180,54 +177,55 @@ impl Handler<ElectionTimeout> for State {
     }
 }
 
-impl Handler<RequestVote> for State {
+impl Handler<RequestVote> for Node {
     type Result = RequestVoteResponse;
 
     fn handle(&mut self, msg: RequestVote, ctx: &mut Self::Context) -> Self::Result {
         debug!("Received a vote request from {}", msg.candidate_id);
         debug!("{:#?}", msg);
 
-        if msg.term > self.current_term {
-            self.current_term = msg.term;
+        if msg.term > self.state.current_term {
+            self.state.current_term = msg.term;
             self.role = Role::Follower;
-            self.voted_for = None;
+            self.state.voted_for = None;
         }
 
-        let last_term = self.log.last().map_or(0, |entry| entry.term);
+        let last_term = self.state.log.last().map_or(0, |entry| entry.term);
 
         let log_ok = msg.last_log_term > last_term
-            || (msg.last_log_term == last_term && msg.last_log_index >= self.log.len() as u64);
+            || (msg.last_log_term == last_term
+                && msg.last_log_index >= self.state.log.len() as u64);
 
-        if msg.term == self.current_term && log_ok && self.voted_for.is_none() {
-            self.voted_for = Some(msg.candidate_id.clone());
+        if msg.term == self.state.current_term && log_ok && self.state.voted_for.is_none() {
+            self.state.voted_for = Some(msg.candidate_id.clone());
 
             debug!("Voted for {}", msg.candidate_id);
             self.reset_election_timer(ctx);
-            RequestVoteResponse::granted(self.id.clone(), self.current_term)
+            RequestVoteResponse::granted(self.id.clone(), self.state.current_term)
         } else {
-            RequestVoteResponse::denied(self.id.clone(), self.current_term)
+            RequestVoteResponse::denied(self.id.clone(), self.state.current_term)
         }
     }
 }
 
-impl Handler<AppendEntries> for State {
+impl Handler<AppendEntries> for Node {
     type Result = AppendEntriesResponse;
 
     fn handle(&mut self, msg: AppendEntries, ctx: &mut Self::Context) -> Self::Result {
         warn!("{:#?}", msg);
 
-        if msg.term < self.current_term {
+        if msg.term < self.state.current_term {
             debug!(
-                "msg.term < self.current_term : {} < {}",
-                msg.term, self.current_term
+                "msg.term < self.state.current_term : {} < {}",
+                msg.term, self.state.current_term
             );
-            return AppendEntriesResponse::failure(self.id.clone(), self.current_term);
+            return AppendEntriesResponse::failure(self.id.clone(), self.state.current_term);
         }
 
-        match self.log.get(msg.prev_log_index) {
+        match self.state.log.get(msg.prev_log_index) {
             None => {
                 debug!("prev_log_index of {} does not exist", msg.prev_log_index);
-                return AppendEntriesResponse::failure(self.id.clone(), self.current_term);
+                return AppendEntriesResponse::failure(self.id.clone(), self.state.current_term);
             }
             Some(entry) => {
                 if entry.term != msg.prev_log_term {
@@ -235,7 +233,10 @@ impl Handler<AppendEntries> for State {
                         "entry.term != msg.prev_log_term : {} != {}",
                         entry.term, msg.prev_log_term
                     );
-                    return AppendEntriesResponse::failure(self.id.clone(), self.current_term);
+                    return AppendEntriesResponse::failure(
+                        self.id.clone(),
+                        self.state.current_term,
+                    );
                 }
             }
         };
@@ -243,29 +244,30 @@ impl Handler<AppendEntries> for State {
         for (offset, entry) in msg.entries.iter().enumerate() {
             let index = msg.prev_log_index + (offset as u128) + 1;
 
-            match self.log.get(index) {
+            match self.state.log.get(index) {
                 None => {
-                    self.log.append(entry.clone());
+                    self.state.log.append(entry.clone());
                 }
                 Some(existing) => {
                     if existing.term != entry.term {
-                        self.log.truncate(index);
-                        self.log.append(entry.clone());
+                        self.state.log.truncate(index);
+                        self.state.log.append(entry.clone());
                     }
                 }
             }
         }
 
-        if msg.leader_commit > self.commit_index {
-            self.commit_index = std::cmp::min(msg.leader_commit, self.log.len() as u128);
+        if msg.leader_commit > self.state.commit_index {
+            self.state.commit_index =
+                std::cmp::min(msg.leader_commit, self.state.log.len() as u128);
         }
-        
+
         self.reset_election_timer(ctx);
-        AppendEntriesResponse::success(self.id.clone(), self.current_term)
+        AppendEntriesResponse::success(self.id.clone(), self.state.current_term)
     }
 }
 
-impl Handler<RequestVoteResponse> for State {
+impl Handler<RequestVoteResponse> for Node {
     type Result = ();
 
     fn handle(&mut self, msg: RequestVoteResponse, _ctx: &mut Self::Context) -> Self::Result {
@@ -273,7 +275,7 @@ impl Handler<RequestVoteResponse> for State {
 
         match &mut self.role {
             Role::Candidate { votes_received } => {
-                if msg.term == self.current_term && msg.vote_granted {
+                if msg.term == self.state.current_term && msg.vote_granted {
                     votes_received.insert(msg.from, true);
                     debug!("Votes received: {:#?}", votes_received);
                     let yes_votes = votes_received.iter().map(|(_, vote)| *vote).len();
@@ -281,12 +283,12 @@ impl Handler<RequestVoteResponse> for State {
                         // TODO - is this right???
                         self.role = Role::Leader {
                             next_index: self
-                                .other_nodes
+                                .peers
                                 .iter()
-                                .map(|node_id| (node_id.clone(), self.log.len() as u128))
+                                .map(|node_id| (node_id.clone(), self.state.log.len() as u128))
                                 .collect(),
                             match_index: self
-                                .other_nodes
+                                .peers
                                 .iter()
                                 .map(|node_id| (node_id.clone(), 0))
                                 .collect(),
@@ -294,10 +296,11 @@ impl Handler<RequestVoteResponse> for State {
 
                         debug!("Elected as leader");
 
-                        for node_id in self.other_nodes.iter() {
-                            self.next_index
-                                .insert(node_id.clone(), self.log.len() as u128);
-                            self.match_index.insert(node_id.clone(), 0);
+                        for node_id in self.peers.iter() {
+                            self.state
+                                .next_index
+                                .insert(node_id.clone(), self.state.log.len() as u128);
+                            self.state.match_index.insert(node_id.clone(), 0);
 
                             // TODO - replicate log entries to all nodes
                         }
@@ -305,10 +308,10 @@ impl Handler<RequestVoteResponse> for State {
                 }
             }
             _ => {
-                if msg.term > self.current_term {
-                    self.current_term = msg.term;
+                if msg.term > self.state.current_term {
+                    self.state.current_term = msg.term;
                     self.role = Role::Follower;
-                    self.voted_for = None;
+                    self.state.voted_for = None;
                 }
                 self.reset_election_timer(_ctx);
             }
@@ -316,7 +319,7 @@ impl Handler<RequestVoteResponse> for State {
     }
 }
 
-impl Handler<AppendEntriesResponse> for State {
+impl Handler<AppendEntriesResponse> for Node {
     type Result = ();
 
     fn handle(&mut self, msg: AppendEntriesResponse, _ctx: &mut Self::Context) -> Self::Result {

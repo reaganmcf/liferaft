@@ -2,11 +2,11 @@ use actix::{Handler, Message};
 use actix_web::{get, web::Data, HttpResponse, Responder};
 use log::error;
 
-use crate::{state::State, AppData};
+use crate::{models::State, AppData, node::Node};
 
 #[get("/state")]
 async fn get_state(data: Data<AppData>) -> impl Responder {
-    match data.state_actor.send(AdminGetState).await {
+    match data.node_actor.send(AdminGetState).await {
         Ok(response) => HttpResponse::Ok().json(response),
         Err(e) => {
             error!("{}", e);
@@ -19,10 +19,10 @@ async fn get_state(data: Data<AppData>) -> impl Responder {
 #[rtype(result = "State")]
 pub struct AdminGetState;
 
-impl Handler<AdminGetState> for State {
-    type Result = Self;
+impl Handler<AdminGetState> for Node {
+    type Result = State;
 
     fn handle(&mut self, _msg: AdminGetState, _ctx: &mut Self::Context) -> Self::Result {
-        self.clone()
+        self.state.clone()
     }
 }

@@ -1,8 +1,11 @@
+use anyhow::{anyhow, Result};
+
 use actix_web::{
     post,
     web::{Data, Json},
     HttpResponse, Responder,
 };
+use anyhow::Context;
 use log::{debug, error};
 
 use crate::{
@@ -13,7 +16,7 @@ use crate::{
 
 #[post("/raft-request-vote")]
 async fn raft_request_vote(Json(body): Json<RequestVote>, data: Data<AppData>) -> impl Responder {
-    match data.state_actor.send(body).await {
+    match data.node_actor.send(body).await {
         Ok(response) => HttpResponse::Ok().json(response),
         Err(e) => {
             error!("{}", e);
@@ -27,7 +30,7 @@ async fn raft_append_entries(
     Json(body): Json<AppendEntries>,
     data: Data<AppData>,
 ) -> impl Responder {
-    match data.state_actor.send(body).await {
+    match data.node_actor.send(body).await {
         Ok(response) => HttpResponse::Ok().json(response),
         Err(e) => {
             error!("{}", e);
@@ -36,35 +39,59 @@ async fn raft_append_entries(
     }
 }
 
-pub async fn send_vote_request(node_id: NodeId, request_vote: RequestVote) -> RequestVoteResponse {
-    let url = format!("http://localhost:{}/raft-request-vote", node_id);
-
-    debug!("Sending vote request to {}", node_id);
-
-    let client = awc::Client::default();
-    match client.post(url).send_json(&request_vote).await {
-        Ok(mut response) => response.json::<RequestVoteResponse>().await.unwrap(),
-        Err(_) => {
-            error!("Failed to send vote request to {}", node_id);
-            panic!();
-        }
-    }
+#[derive(Clone)]
+pub struct RpcClient {
+    client: awc::Client,
 }
 
-pub async fn send_append_entries(
-    node_id: NodeId,
-    append_entries: AppendEntries,
-) -> AppendEntriesResponse {
-    let url = format!("http://localhost:{}/raft-append-entries", node_id);
-
-    debug!("Sending append entries to {}", node_id);
-
-    let client = awc::Client::default();
-    match client.post(url).send_json(&append_entries).await {
-        Ok(mut response) => response.json::<AppendEntriesResponse>().await.unwrap(),
-        Err(_) => {
-            error!("Failed to send append entries to {}", node_id);
-            panic!();
+impl RpcClient {
+    pub fn new() -> Self {
+        Self {
+            client: awc::Client::default(),
         }
+    }
+
+    pub async fn send_request_vote(
+        &self,
+        node_id: NodeId,
+        request_vote: RequestVote,
+    ) -> Result<RequestVoteResponse> {
+        debug!("Sending vote request to {}", node_id);
+
+        self.send_request(node_id, "raft-request-vote", request_vote)
+            .await
+            .with_context(|| "vote request failed")
+    }
+
+    pub async fn send_append_entries(
+        &self,
+        node_id: NodeId,
+        append_entries: AppendEntries,
+    ) -> Result<AppendEntriesResponse> {
+        debug!("Sending append entries to {}", node_id);
+
+        self.send_request(node_id, "raft-append-entries", append_entries)
+            .await
+            .with_context(|| "append entries failed")
+    }
+
+    async fn send_request<D: serde::Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        node_id: NodeId,
+        path: &str,
+        body: D,
+    ) -> Result<R> {
+        let url = format!("http://localhost:{}/{}", node_id, path);
+
+        let mut response = self
+            .client
+            .post(url)
+            .send_json(&body)
+            .await
+            .map_err(|e| anyhow!("Failed to send request to {}: {}", node_id, e))?;
+        response
+            .json::<R>()
+            .await
+            .with_context(|| format!("Failed to send request to {}", node_id))
     }
 }
