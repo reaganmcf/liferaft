@@ -50,7 +50,7 @@ impl Log {
     }
 
     pub fn last_index(&self) -> LogIndex {
-        self.entries.len() as LogIndex
+        self.entries.len() as LogIndex - 1
     }
 
     pub fn get(&self, index: LogIndex) -> Option<&LogEntry> {

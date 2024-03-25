@@ -1,5 +1,6 @@
-use actix::{Message, MessageResponse};
+use actix::{dev::MessageResponse, Message};
 use actix_web::web;
+use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -59,32 +60,53 @@ pub struct AppendEntriesResponse {
     pub from: NodeId,
     pub term: Term,
     pub success: bool,
+
+    // Need this to handle out-of-order responses
+    pub prev_log_index: LogIndex,
+    pub was_heartbeat: bool,
 }
 
 impl AppendEntriesResponse {
-    pub fn success(from: NodeId, term: Term) -> Self {
+    pub fn success(
+        from: NodeId,
+        term: Term,
+        prev_log_index: LogIndex,
+        was_heartbeat: bool,
+    ) -> Self {
         Self {
             from,
             term,
             success: true,
+            prev_log_index,
+            was_heartbeat,
         }
     }
 
-    pub fn failure(from: NodeId, term: Term) -> Self {
+    pub fn failure(
+        from: NodeId,
+        term: Term,
+        prev_log_index: LogIndex,
+        was_heartbeat: bool,
+    ) -> Self {
         Self {
             from,
             term,
             success: false,
+            prev_log_index,
+            was_heartbeat,
         }
     }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Message)]
-#[rtype(result = "SetKeyResponse")]
+#[rtype(result = "SetKeyActorResponse")]
 pub struct SetKey {
     pub key: String,
     pub value: String,
 }
+
+#[derive(MessageResponse)]
+pub struct SetKeyActorResponse(pub oneshot::Receiver<SetKeyResponse>);
 
 #[derive(Deserialize, Serialize, Debug, Clone, MessageResponse)]
 pub struct SetKeyResponse {

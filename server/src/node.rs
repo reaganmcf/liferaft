@@ -1,17 +1,28 @@
 use actix::prelude::*;
+use futures::channel::oneshot;
 use log::{debug, error, info, warn};
 use rand::{thread_rng, Rng};
+use std::arch::is_aarch64_feature_detected;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::log::{Log, LogEntry, LogEntryContent, KvChange};
+use crate::log::{KvChange, Log, LogEntry, LogEntryContent, LogIndex};
 use crate::messages::{
     AppendEntries, AppendEntriesResponse, GetKey, GetKeyResponse, RequestVote, RequestVoteResponse,
-    SetKey, SetKeyResponse,
+    SetKey, SetKeyActorResponse, SetKeyResponse,
 };
 use crate::models::*;
 use crate::rpc::RpcClient;
+
+fn has_quorum(total_nodes: usize, positive_responses: usize) -> bool {
+    positive_responses > total_nodes / 2
+}
+
+struct InflightAppendEntries {
+    pub tx: oneshot::Sender<SetKeyResponse>,
+    pub success_nodes: HashSet<NodeId>,
+}
 
 pub struct Node {
     pub id: NodeId,
@@ -24,6 +35,7 @@ pub struct Node {
     pub heartbeat_interval: Duration,
 
     pub rpc_client: Arc<RpcClient>,
+    pub inflight_append_entries: HashMap<(Term, LogIndex), InflightAppendEntries>,
 }
 
 impl Node {
@@ -59,6 +71,7 @@ impl Node {
             election_timer: None,
             heartbeat_interval,
             rpc_client: Arc::new(RpcClient::new()),
+            inflight_append_entries: HashMap::default(),
         }
     }
 
@@ -121,6 +134,11 @@ impl Actor for Node {
         // Heartbeat timer for leaders
         ctx.run_interval(self.heartbeat_interval, |_act, ctx| {
             ctx.notify(SendHeartbeatToFollowers)
+        });
+
+        // Inflight AppendEntries checks
+        ctx.run_interval(Duration::from_millis(250), |_act, ctx| {
+            ctx.notify(CheckInflightAppendEntries)
         });
 
         // Election timer for followers and candidates
@@ -220,18 +238,30 @@ impl Handler<AppendEntries> for Node {
     fn handle(&mut self, msg: AppendEntries, ctx: &mut Self::Context) -> Self::Result {
         warn!("{:#?}", msg);
 
+        let is_heartbeat = msg.entries.is_empty();
+
         if msg.term < self.state.current_term {
             debug!(
                 "msg.term < self.state.current_term : {} < {}",
                 msg.term, self.state.current_term
             );
-            return AppendEntriesResponse::failure(self.id.clone(), self.state.current_term);
+            return AppendEntriesResponse::failure(
+                self.id.clone(),
+                self.state.current_term,
+                msg.prev_log_index,
+                is_heartbeat,
+            );
         }
 
         match self.state.log.get(msg.prev_log_index) {
             None => {
                 debug!("prev_log_index of {} does not exist", msg.prev_log_index);
-                return AppendEntriesResponse::failure(self.id.clone(), self.state.current_term);
+                return AppendEntriesResponse::failure(
+                    self.id.clone(),
+                    self.state.current_term,
+                    msg.prev_log_index,
+                    is_heartbeat,
+                );
             }
             Some(entry) => {
                 if entry.term != msg.prev_log_term {
@@ -242,6 +272,8 @@ impl Handler<AppendEntries> for Node {
                     return AppendEntriesResponse::failure(
                         self.id.clone(),
                         self.state.current_term,
+                        msg.prev_log_index,
+                        is_heartbeat,
                     );
                 }
             }
@@ -269,7 +301,12 @@ impl Handler<AppendEntries> for Node {
         }
 
         self.reset_election_timer(ctx);
-        AppendEntriesResponse::success(self.id.clone(), self.state.current_term)
+        AppendEntriesResponse::success(
+            self.id.clone(),
+            self.state.current_term,
+            msg.prev_log_index,
+            is_heartbeat,
+        )
     }
 }
 
@@ -329,15 +366,36 @@ impl Handler<AppendEntriesResponse> for Node {
     type Result = ();
 
     fn handle(&mut self, msg: AppendEntriesResponse, _ctx: &mut Self::Context) -> Self::Result {
+        if msg.was_heartbeat {
+            return;
+        }
         debug!("Received an append entries result, {:#?}", msg);
-        error!("AppendEntriesResult not implemented");
+
+        match self
+            .inflight_append_entries
+            .get_mut(&(msg.term, msg.prev_log_index))
+        {
+            Some(inflight_request) => {
+                inflight_request.success_nodes.insert(msg.from.clone());
+                info!(
+                    "Received append entries response from {} for term {} and prev_log_index {}",
+                    msg.from, msg.term, msg.prev_log_index
+                );
+            }
+            None => {
+                error!(
+                    "No inflight request found for term {} and prev_log_index {}",
+                    msg.term, msg.prev_log_index
+                );
+            }
+        }
     }
 }
 
 impl Handler<GetKey> for Node {
     type Result = GetKeyResponse;
 
-    fn handle(&mut self, msg: GetKey, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, _msg: GetKey, _ctx: &mut Self::Context) -> Self::Result {
         error!("GetKey not implemented");
 
         GetKeyResponse::failure()
@@ -345,19 +403,85 @@ impl Handler<GetKey> for Node {
 }
 
 impl Handler<SetKey> for Node {
-    type Result = SetKeyResponse;
+    type Result = SetKeyActorResponse;
 
-    fn handle(&mut self, msg: SetKey, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: SetKey, ctx: &mut Self::Context) -> Self::Result {
         debug!("Received a set key request, {:#?}", msg);
-
-        let entry = LogEntry {
+        let log_entry = LogEntry {
             term: self.state.current_term,
             content: LogEntryContent::Kv(KvChange::Set(msg.key.clone(), msg.value.clone())),
         };
+        let append_entry = AppendEntries {
+            term: self.state.current_term,
+            leader_id: self.id.clone(),
+            prev_log_index: self.state.log.last_index(),
+            prev_log_term: self.state.log.last_term(),
+            entries: vec![log_entry.clone()],
+            leader_commit: self.state.commit_index,
+        };
 
-        self.state.log.append(entry);
+        self.state.log.append(log_entry.clone());
+        for node_id in self.peers.iter() {
+            let cloned_addr = ctx.address().clone();
+            let cloned_node_id = node_id.clone();
+            let rpc_client = self.rpc_client.clone();
+            let cloned_append_entry = append_entry.clone();
+            actix_web::rt::spawn(async move {
+                let future = rpc_client.send_append_entries(cloned_node_id, cloned_append_entry);
+                match future.await {
+                    Ok(response) => cloned_addr.do_send(response),
+                    Err(e) => error!("{}", e),
+                }
+            });
+        }
 
-        // We cannot return success until the entry has been 
-        // replicated to the quorum of nodes
+        let (tx, rx) = oneshot::channel();
+
+        self.inflight_append_entries.insert(
+            (append_entry.term, append_entry.prev_log_index),
+            InflightAppendEntries {
+                tx,
+                success_nodes: HashSet::default(),
+            },
+        );
+
+        SetKeyActorResponse(rx)
+    }
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+struct CheckInflightAppendEntries;
+
+impl Handler<CheckInflightAppendEntries> for Node {
+    type Result = ();
+
+    fn handle(
+        &mut self,
+        _msg: CheckInflightAppendEntries,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        // TODO - handle some kind of timeout so we can retry
+
+        let entries = std::mem::take(&mut self.inflight_append_entries);
+        let mut kept: HashMap<(Term, LogIndex), InflightAppendEntries> = HashMap::default();
+
+        for (key, inflight) in entries {
+            if inflight.success_nodes.len() >= self.qourum() {
+                info!(
+                    "Received enough success' to commit log entry {}. ({} / {})",
+                    key.1,
+                    inflight.success_nodes.len(),
+                    self.qourum()
+                );
+                if inflight.tx.send(SetKeyResponse::success()).is_err() {
+                    error!("Failed to send SetKeyResponse back to web handler");
+                }
+            } else {
+                kept.insert(key, inflight);
+            }
+        }
+
+        self.inflight_append_entries = kept;
     }
 }

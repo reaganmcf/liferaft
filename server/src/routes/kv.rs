@@ -1,6 +1,5 @@
 use actix_web::{
-    get,
-    post,
+    get, post,
     web::{Data, Json, Path},
     HttpResponse, Responder,
 };
@@ -14,7 +13,10 @@ use crate::{
 #[post("/kv/set")]
 async fn set(data: Data<AppData>, Json(body): Json<SetKey>) -> impl Responder {
     match data.node_actor.send(body).await {
-        Ok(response) => HttpResponse::Ok().json(response),
+        Ok(chan) => {
+            let response = chan.0.await.unwrap();
+            HttpResponse::Ok().json(response)
+        }
         Err(e) => {
             error!("{}", e);
             HttpResponse::InternalServerError().finish()
