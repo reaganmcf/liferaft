@@ -69,4 +69,19 @@ impl Log {
     pub fn last(&self) -> Option<&LogEntry> {
         self.entries.last()
     }
+
+    // TODO - this feels really leaky?
+    pub fn kv_get(&self, key: String) -> Option<String> {
+        self.entries
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.content {
+                LogEntryContent::Kv(change) => match change {
+                    KvChange::Set(entry_key, value) if *entry_key == key => Some(value.clone()),
+                    KvChange::Delete(entry_key) if *entry_key == key => None,
+                    _ => None,
+                },
+                _ => None,
+            })
+    }
 }

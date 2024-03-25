@@ -139,22 +139,5 @@ impl From<web::Path<String>> for GetKey {
 
 #[derive(Deserialize, Serialize, Debug, Clone, MessageResponse)]
 pub struct GetKeyResponse {
-    pub success: bool,
     pub value: Option<String>,
-}
-
-impl GetKeyResponse {
-    pub fn success(value: Option<String>) -> Self {
-        Self {
-            success: true,
-            value,
-        }
-    }
-
-    pub fn failure() -> Self {
-        Self {
-            success: false,
-            value: None,
-        }
-    }
 }

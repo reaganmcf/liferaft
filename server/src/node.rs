@@ -2,7 +2,6 @@ use actix::prelude::*;
 use futures::channel::oneshot;
 use log::{debug, error, info, warn};
 use rand::{thread_rng, Rng};
-use std::arch::is_aarch64_feature_detected;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -395,10 +394,10 @@ impl Handler<AppendEntriesResponse> for Node {
 impl Handler<GetKey> for Node {
     type Result = GetKeyResponse;
 
-    fn handle(&mut self, _msg: GetKey, _ctx: &mut Self::Context) -> Self::Result {
-        error!("GetKey not implemented");
-
-        GetKeyResponse::failure()
+    fn handle(&mut self, msg: GetKey, _ctx: &mut Self::Context) -> Self::Result {
+        info!("Received a get key request, {:#?}", msg);
+        let value = self.state.log.kv_get(msg.key);
+        GetKeyResponse { value }
     }
 }
 
