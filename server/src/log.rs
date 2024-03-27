@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::models::Term;
@@ -27,18 +29,40 @@ pub struct LogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Log {
     pub entries: Vec<LogEntry>,
+    pub path: PathBuf,
 }
 
 impl Log {
-    pub fn new() -> Self {
-        let null_entry = LogEntry {
-            term: 0,
-            content: LogEntryContent::Null,
+    pub fn new(path: PathBuf) -> Self {
+        let entries = {
+            if path.exists() {
+                let serialized = std::fs::read_to_string(path.clone()).expect("Failed to read log");
+                
+                // serialize into vec
+                if serialized.len() > 0 {
+                    let entries: Vec<LogEntry> = serde_json::from_str(&serialized).unwrap();
+                    entries
+                } else {
+                    let null_entry = LogEntry {
+                        term: 0,
+                        content: LogEntryContent::Null,
+                    };
+                    vec![null_entry]
+                }
+            } else {
+                let null_entry = LogEntry {
+                    term: 0,
+                    content: LogEntryContent::Null,
+                };
+
+                vec![null_entry]
+            }
         };
 
-        Log {
-            entries: vec![null_entry],
-        }
+        let log = Log { entries, path };
+        log.save().expect("Failed to save log");
+
+        log
     }
 
     pub fn append(&mut self, entry: LogEntry) {
@@ -83,5 +107,10 @@ impl Log {
                 },
                 _ => None,
             })
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let serialized = serde_json::to_string(&self.entries)?;
+        std::fs::write(&self.path, serialized)
     }
 }

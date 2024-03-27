@@ -3,6 +3,7 @@ use futures::channel::oneshot;
 use log::{debug, error, info, warn};
 use rand::{thread_rng, Rng};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,10 +14,6 @@ use crate::messages::{
 };
 use crate::models::*;
 use crate::rpc::RpcClient;
-
-fn has_quorum(total_nodes: usize, positive_responses: usize) -> bool {
-    positive_responses > total_nodes / 2
-}
 
 struct InflightAppendEntries {
     pub tx: oneshot::Sender<SetKeyResponse>,
@@ -34,11 +31,11 @@ pub struct Node {
     pub heartbeat_interval: Duration,
 
     pub rpc_client: Arc<RpcClient>,
-    pub inflight_append_entries: HashMap<(Term, LogIndex), InflightAppendEntries>,
+    inflight_append_entries: HashMap<(Term, LogIndex), InflightAppendEntries>,
 }
 
 impl Node {
-    pub fn initialize(id: NodeId, peers: HashSet<NodeId>, heartbeat_interval: Duration) -> Self {
+    pub fn initialize(id: NodeId, peers: HashSet<NodeId>, log_path: PathBuf, heartbeat_interval: Duration) -> Self {
         // TODO - fix this hack
         let election_timeout_interval = {
             if id == *"1234" {
@@ -50,6 +47,9 @@ impl Node {
 
         debug!("Election timeout set to {:?}", election_timeout_interval);
 
+        let log = Log::new(log_path);
+        let commit_index = log.len() as u128;
+
         Self {
             id,
             peers,
@@ -58,9 +58,9 @@ impl Node {
             state: State {
                 current_term: 0,
                 voted_for: None,
-                log: Log::new(),
+                log,
 
-                commit_index: 0,
+                commit_index,
                 last_applied: 0,
 
                 next_index: HashMap::default(),
@@ -75,7 +75,7 @@ impl Node {
     }
 
     fn start_election(&mut self, ctx: &mut Context<Self>) {
-        debug!("Starting election");
+        info!("Starting election");
 
         self.role = Role::candidate(&self.peers);
         self.state.current_term += 1;
@@ -109,7 +109,7 @@ impl Node {
     }
 
     fn reset_election_timer(&mut self, ctx: &mut Context<Self>) {
-        info!("Resetting election timer");
+        debug!("Resetting election timer");
         if let Some(handle) = self.election_timer.take() {
             if !ctx.cancel_future(handle) {
                 panic!("Failed to cancel election timer");
@@ -204,7 +204,7 @@ impl Handler<RequestVote> for Node {
     type Result = RequestVoteResponse;
 
     fn handle(&mut self, msg: RequestVote, ctx: &mut Self::Context) -> Self::Result {
-        debug!("Received a vote request from {}", msg.candidate_id);
+        info!("Received a vote request from {}", msg.candidate_id);
         debug!("{:#?}", msg);
 
         if msg.term > self.state.current_term {
@@ -222,7 +222,7 @@ impl Handler<RequestVote> for Node {
         if msg.term == self.state.current_term && log_ok && self.state.voted_for.is_none() {
             self.state.voted_for = Some(msg.candidate_id.clone());
 
-            debug!("Voted for {}", msg.candidate_id);
+            info!("Voted for {}", msg.candidate_id);
             self.reset_election_timer(ctx);
             RequestVoteResponse::granted(self.id.clone(), self.state.current_term)
         } else {
@@ -235,7 +235,7 @@ impl Handler<AppendEntries> for Node {
     type Result = AppendEntriesResponse;
 
     fn handle(&mut self, msg: AppendEntries, ctx: &mut Self::Context) -> Self::Result {
-        warn!("{:#?}", msg);
+        debug!("{:#?}", msg);
 
         let is_heartbeat = msg.entries.is_empty();
 
@@ -297,6 +297,16 @@ impl Handler<AppendEntries> for Node {
         if msg.leader_commit > self.state.commit_index {
             self.state.commit_index =
                 std::cmp::min(msg.leader_commit, self.state.log.len() as u128);
+            info!("Updated commit index to {}", self.state.commit_index);
+            if let Err(e) = self.state.log.save() {
+                error!("Failed to save log: {}", e);
+                AppendEntriesResponse::failure(
+                    self.id.clone(),
+                    self.state.current_term,
+                    msg.prev_log_index,
+                    is_heartbeat,
+                );
+            }
         }
 
         self.reset_election_timer(ctx);
@@ -313,7 +323,8 @@ impl Handler<RequestVoteResponse> for Node {
     type Result = ();
 
     fn handle(&mut self, msg: RequestVoteResponse, _ctx: &mut Self::Context) -> Self::Result {
-        debug!("Received a vote result, {:#?}", msg);
+        info!("Received a vote result from, {}", msg.from);
+        debug!("{:#?}", msg);
 
         match &mut self.role {
             Role::Candidate { votes_received } => {
@@ -336,7 +347,7 @@ impl Handler<RequestVoteResponse> for Node {
                                 .collect(),
                         };
 
-                        debug!("Elected as leader");
+                        info!("Elected as leader");
 
                         for node_id in self.peers.iter() {
                             self.state
@@ -406,6 +417,7 @@ impl Handler<SetKey> for Node {
 
     fn handle(&mut self, msg: SetKey, ctx: &mut Self::Context) -> Self::Result {
         debug!("Received a set key request, {:#?}", msg);
+
         let log_entry = LogEntry {
             term: self.state.current_term,
             content: LogEntryContent::Kv(KvChange::Set(msg.key.clone(), msg.value.clone())),
@@ -461,7 +473,6 @@ impl Handler<CheckInflightAppendEntries> for Node {
         _ctx: &mut Self::Context,
     ) -> Self::Result {
         // TODO - handle some kind of timeout so we can retry
-
         let entries = std::mem::take(&mut self.inflight_append_entries);
         let mut kept: HashMap<(Term, LogIndex), InflightAppendEntries> = HashMap::default();
 
@@ -473,6 +484,9 @@ impl Handler<CheckInflightAppendEntries> for Node {
                     inflight.success_nodes.len(),
                     self.qourum()
                 );
+
+                self.state.commit_index = key.1;
+
                 if inflight.tx.send(SetKeyResponse::success()).is_err() {
                     error!("Failed to send SetKeyResponse back to web handler");
                 }

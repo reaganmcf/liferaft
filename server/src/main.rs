@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, path::PathBuf};
 use std::time::Duration;
 
 use actix::{Actor, Addr};
@@ -27,6 +27,9 @@ struct Args {
     #[arg(long)]
     port: u16,
 
+    #[arg(long, default_value = "log.json")]
+    log_file: String,
+
     #[arg(long, default_value = "3000")]
     heratbeat_interval_ms: u64,
 }
@@ -48,6 +51,7 @@ async fn main() -> std::io::Result<()> {
     let node_addr = node::Node::initialize(
         args.id,
         args.peers.into_iter().collect::<HashSet<NodeId>>(),
+        PathBuf::from(args.log_file),
         Duration::from_millis(args.heratbeat_interval_ms),
     )
     .start();
